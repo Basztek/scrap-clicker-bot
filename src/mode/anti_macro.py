@@ -4,7 +4,6 @@ import threading
 from time import sleep
 import numpy as np
 import random
-from skimage.measure import compare_ssim as ssim
 
 y_min = 90
 y_max = 503

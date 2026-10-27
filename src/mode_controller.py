@@ -56,7 +56,7 @@ class ModeController:
                     ad_found = False
 
             if ad_active:
-                if resolver is None or not resolver.isAlive():
+                if resolver is None or not resolver.is_alive():
                     resolver = None
                     ad_active = False
                     ad_found = False
@@ -72,7 +72,7 @@ class ModeController:
                         resolver = ResolveAntiMacro(frame)
                         resolver.start()
                     else:
-                        if not resolver.isAlive():
+                        if not resolver.is_alive():
                             resolver = None
             elif self.magnet_cloud_mode.is_mode_active(frame):
                 self.magnet_cloud_mode.process_mode()

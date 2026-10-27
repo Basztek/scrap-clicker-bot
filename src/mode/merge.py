@@ -50,8 +50,9 @@ class Merge:
         waiting_for_pair = {}
         pairs_to_merge = []
         barrel_per_position = self.barrels_detector.types_per_position(frame)
-        barrel_per_position_without_empty_barrel = list(filter((0).__ne__, barrel_per_position))
-        for barrel_position, barrel_level in enumerate(barrel_per_position_without_empty_barrel):
+        for barrel_position, barrel_level in enumerate(barrel_per_position):
+            if barrel_level == 0:
+                continue
             if barrel_level >= self.max_level:
                 self.remove_barrel(barrel_position)
                 continue

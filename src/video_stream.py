@@ -1,43 +1,50 @@
+import socket
 import subprocess
 import threading
 
 
 class VideoStream(threading.Thread):
-    video = 0
-    server = 0
+    # Serves the phone's screen (h264 from adb screenrecord) on 127.0.0.1:<port>.
+    # Each client connection gets a fresh screenrecord process, so when it ends
+    # (screenrecord stops after ~3 minutes) the client just reconnects.
+    host = '127.0.0.1'
     port = None
+    size = None
+    time_limit = None
 
-    def __init__(self, port):
-        self.port = port
-        threading.Thread.__init__(self)
-
-    def keep_mobile_video_streaming_alive(self):
-        if self.video == 0 or self.video.poll() is not None:
-            self.initialize_video()
-        if self.server == 0 or self.server.poll() is not None:
-            self.initialize_tcp_server()
+    def __init__(self, port, size='480x640', time_limit=180):
+        self.port = int(port)
+        self.size = size
+        self.time_limit = time_limit
+        threading.Thread.__init__(self, daemon=True)
 
     def initialize_video(self):
-        self.video = subprocess.Popen(
-            ["adb", "exec-out", "screenrecord", "--bit-rate=8m", "--output-format=h264", "--size=480x640", "-"],
+        return subprocess.Popen(
+            ["adb", "exec-out", "screenrecord", "--bit-rate=8m", "--output-format=h264",
+             "--size=" + self.size, "--time-limit=%d" % self.time_limit, "-"],
             stdout=subprocess.PIPE, shell=False
         )
 
-    def initialize_tcp_server(self):
-        self.server = subprocess.Popen(
-            ('nc -l ' + self.port),
-            shell=True,
-            stdin=self.video.stdout,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE
-        )
-
-    def kill_video_stream(self):
-        self.video.kill()
-        self.server.kill()
+    def stream_to_client(self, client):
+        video = self.initialize_video()
+        try:
+            while True:
+                chunk = video.stdout.read1(65536)
+                if not chunk:
+                    break
+                client.sendall(chunk)
+        except OSError:
+            pass
+        finally:
+            video.kill()
+            video.wait()
+            client.close()
 
     def run(self):
-        self.initialize_video()
-        self.initialize_tcp_server()
+        server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        server.bind((self.host, self.port))
+        server.listen(1)
         while True:
-            self.keep_mobile_video_streaming_alive()
+            client, _ = server.accept()
+            self.stream_to_client(client)

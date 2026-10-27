@@ -1,5 +1,4 @@
-sudo python3.6 -m pip install opencv
-sudo python3.6 -m pip install numpy
-sudo python3.6 -m pip install pyocr
-sudo python3.6 -m pip install scikit-image
-sudo apt-get install tesseract-ocr
+opencv-python
+numpy
+pillow
+pyocr
