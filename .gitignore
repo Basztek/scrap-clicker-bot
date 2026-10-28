@@ -69,3 +69,13 @@ venv.bak/
 
 # Built touch injector (injector/build.sh)
 injector/injector.dex
+
+# Per-phone calibration (calibrate.py)
+calibration.json
+calibration.png
+
+# Saved runs (runs.py)
+runs/
+
+# mypy
+.mypy_cache/

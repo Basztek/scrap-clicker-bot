@@ -16,7 +16,9 @@ import java.io.InputStreamReader;
 import java.lang.reflect.Method;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Long-running touch injector and screen grabber, started on the phone with
@@ -25,6 +27,8 @@ import java.util.List;
  *
  * Reads one command per line from stdin:
  *   d X Y     finger down     m X Y   move     u X Y   finger up
+ *   d ID X Y [ID X Y...]  the same for several fingers (multi-touch), ID = any number per finger;
+ *             "d X Y" is finger 0
  *   s MS      sleep           sync    answers "ok" once everything before it was injected
  *   frame W H answers "frame W H STRIDE" and STRIDE*H bytes of RGBA: the screen scaled to WxH
  *   screen 0  turn the display panel off (apps keep running, frames keep working)
@@ -40,6 +44,8 @@ public final class Injector {
     private static Method injectInputEvent;
     private static int deviceId = -1;
     private static long downTime;
+    // Fingers on the screen, in the order they went down: id -> {x, y}
+    private static final Map<Integer, float[]> pointers = new LinkedHashMap<>();
     private static boolean screenOff;
     private static IBinder[] displayTokens;
     private static ImageReader reader;
@@ -79,6 +85,12 @@ public final class Injector {
         } catch (IOException e) {
             // Connection to the PC lost: clean up just like at a normal end of input
         }
+        // A finger left down (the bot killed in the middle of a drag) makes the game
+        // ignore every later touch until it is paused and resumed
+        if (!pointers.isEmpty()) {
+            inject(MotionEvent.ACTION_CANCEL, -1);
+            pointers.clear();
+        }
         if (screenOff) {
             setScreenPower(true);
         }
@@ -99,14 +111,9 @@ public final class Injector {
             String[] parts = line.trim().split(" ");
             switch (parts[0]) {
                 case "d":
-                    downTime = SystemClock.uptimeMillis();
-                    touch(MotionEvent.ACTION_DOWN, parts);
-                    break;
                 case "m":
-                    touch(MotionEvent.ACTION_MOVE, parts);
-                    break;
                 case "u":
-                    touch(MotionEvent.ACTION_UP, parts);
+                    touch(parts);
                     break;
                 case "s":
                     SystemClock.sleep(Long.parseLong(parts[1]));
@@ -233,21 +240,66 @@ public final class Injector {
         }
     }
 
-    private static void touch(int action, String[] parts) throws Exception {
-        MotionEvent.PointerProperties properties = new MotionEvent.PointerProperties();
-        properties.id = 0;
-        properties.toolType = MotionEvent.TOOL_TYPE_FINGER;
+    /** "d/m/u X Y" (finger 0) or "d/m/u ID X Y ID X Y...": every finger listed goes down / moves / goes up. */
+    private static void touch(String[] parts) throws Exception {
+        boolean single = parts.length == 3;
+        for (int i = 1; i + (single ? 1 : 2) < parts.length; i += single ? 2 : 3) {
+            int id = single ? 0 : Integer.parseInt(parts[i]);
+            int at = single ? i : i + 1;
+            float[] position = {Float.parseFloat(parts[at]), Float.parseFloat(parts[at + 1])};
+            switch (parts[0]) {
+                case "d":
+                    if (pointers.isEmpty()) {
+                        downTime = SystemClock.uptimeMillis();
+                    }
+                    pointers.remove(id);
+                    pointers.put(id, position);
+                    inject(pointers.size() == 1 ? MotionEvent.ACTION_DOWN : MotionEvent.ACTION_POINTER_DOWN, id);
+                    break;
+                case "u":
+                    if (!pointers.containsKey(id)) {
+                        break;
+                    }
+                    pointers.put(id, position);
+                    inject(pointers.size() == 1 ? MotionEvent.ACTION_UP : MotionEvent.ACTION_POINTER_UP, id);
+                    pointers.remove(id);
+                    break;
+                default:
+                    if (pointers.containsKey(id)) {
+                        pointers.put(id, position);
+                    }
+                    break;
+            }
+        }
+        // One move event carries all fingers
+        if (parts[0].equals("m") && !pointers.isEmpty()) {
+            inject(MotionEvent.ACTION_MOVE, -1);
+        }
+    }
 
-        MotionEvent.PointerCoords coords = new MotionEvent.PointerCoords();
-        coords.x = Float.parseFloat(parts[1]);
-        coords.y = Float.parseFloat(parts[2]);
-        coords.pressure = action == MotionEvent.ACTION_UP ? 0f : 1f;
-        coords.size = 0.05f;
+    /** Injects an event with every finger on the screen; changed = the finger going down/up. */
+    private static void inject(int action, int changed) throws Exception {
+        int count = pointers.size();
+        MotionEvent.PointerProperties[] properties = new MotionEvent.PointerProperties[count];
+        MotionEvent.PointerCoords[] coords = new MotionEvent.PointerCoords[count];
+        int index = 0;
+        for (Map.Entry<Integer, float[]> pointer : pointers.entrySet()) {
+            properties[index] = new MotionEvent.PointerProperties();
+            properties[index].id = pointer.getKey();
+            properties[index].toolType = MotionEvent.TOOL_TYPE_FINGER;
+            coords[index] = new MotionEvent.PointerCoords();
+            coords[index].x = pointer.getValue()[0];
+            coords[index].y = pointer.getValue()[1];
+            coords[index].pressure = action == MotionEvent.ACTION_UP ? 0f : 1f;
+            coords[index].size = 0.05f;
+            if (pointer.getKey() == changed && action != MotionEvent.ACTION_DOWN && action != MotionEvent.ACTION_UP) {
+                action |= index << MotionEvent.ACTION_POINTER_INDEX_SHIFT;
+            }
+            index++;
+        }
 
         MotionEvent event = MotionEvent.obtain(
-                downTime, SystemClock.uptimeMillis(), action, 1,
-                new MotionEvent.PointerProperties[]{properties},
-                new MotionEvent.PointerCoords[]{coords},
+                downTime, SystemClock.uptimeMillis(), action, count, properties, coords,
                 0, 0, 1f, 1f, deviceId, 0, InputDevice.SOURCE_TOUCHSCREEN, 0);
         injectInputEvent.invoke(inputManager, event, INJECT_MODE_ASYNC);
         event.recycle();
